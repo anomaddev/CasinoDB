@@ -1,0 +1,579 @@
+import { writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { stringify } from "yaml";
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../../..");
+
+const spec = {
+  openapi: "3.1.0",
+  info: {
+    title: "CasinoDB API",
+    version: "0.1.0",
+    description:
+      "Multi-app casino catalog and crowd-sourced floor intel. Google Place ID is the canonical venue id. Public reads never include reporter or client session identifiers.",
+  },
+  servers: [{ url: "http://localhost:3000", description: "Local" }],
+  tags: [
+    { name: "Health" },
+    { name: "Casinos" },
+    { name: "Intel" },
+    { name: "Reviews" },
+  ],
+  components: {
+    securitySchemes: {
+      apiKey: {
+        type: "http",
+        scheme: "bearer",
+        description: "Per-app API key. `source_app` and scopes come from the key, not the body.",
+      },
+    },
+    schemas: {
+      Error: {
+        type: "object",
+        required: ["error"],
+        properties: {
+          error: {
+            type: "object",
+            required: ["code", "message"],
+            properties: {
+              code: {
+                type: "string",
+                enum: [
+                  "unauthorized",
+                  "forbidden",
+                  "validation_error",
+                  "not_found",
+                  "places_unavailable",
+                  "internal",
+                ],
+              },
+              message: { type: "string" },
+              details: {},
+            },
+          },
+        },
+      },
+      Coordinates: {
+        type: "object",
+        required: ["latitude", "longitude"],
+        properties: {
+          latitude: { type: "number", minimum: -90, maximum: 90 },
+          longitude: { type: "number", minimum: -180, maximum: 180 },
+        },
+      },
+      IntelSummary: {
+        type: "object",
+        required: [
+          "backedOffLast90d",
+          "trespassedLast90d",
+          "lastIncidentAt",
+          "currentTableCount",
+        ],
+        properties: {
+          backedOffLast90d: { type: "integer", minimum: 0 },
+          trespassedLast90d: { type: "integer", minimum: 0 },
+          lastIncidentAt: { type: "string", format: "date-time", nullable: true },
+          currentTableCount: { type: "integer", minimum: 0 },
+        },
+      },
+      Casino: {
+        type: "object",
+        required: [
+          "id",
+          "placeId",
+          "name",
+          "address",
+          "coordinates",
+          "googleRating",
+          "intel",
+          "updatedAt",
+        ],
+        properties: {
+          id: { type: "string", format: "uuid" },
+          placeId: { type: "string" },
+          name: { type: "string" },
+          address: { type: "string" },
+          coordinates: { $ref: "#/components/schemas/Coordinates" },
+          googleRating: { type: "number", nullable: true },
+          intel: { $ref: "#/components/schemas/IntelSummary" },
+          updatedAt: { type: "string", format: "date-time" },
+        },
+      },
+      PublicIncident: {
+        type: "object",
+        required: ["id", "kind", "occurredAt", "notes"],
+        properties: {
+          id: { type: "string", format: "uuid" },
+          kind: { type: "string", enum: ["backed_off", "trespassed"] },
+          occurredAt: { type: "string", format: "date-time" },
+          notes: { type: "string", nullable: true },
+        },
+      },
+      TableRules: {
+        type: "object",
+        properties: {
+          deckCount: { type: "integer", minimum: 1, maximum: 8 },
+          payout: { type: "string", enum: ["Standard", "SixToFive"] },
+          standOnSoft17: { type: "boolean" },
+          doubleAfterSplit: { type: "boolean" },
+          surrender: {
+            type: "string",
+            enum: ["Off", "LateSurrender", "EarlySurrender"],
+          },
+        },
+      },
+      PublicTableCondition: {
+        type: "object",
+        required: [
+          "id",
+          "eventKind",
+          "reportedAt",
+          "tableLabel",
+          "tableMinimum",
+          "tableMaximum",
+          "betUnit",
+          "shuffle",
+          "rules",
+          "notes",
+        ],
+        properties: {
+          id: { type: "string", format: "uuid" },
+          eventKind: { type: "string", enum: ["seated", "updated", "departed"] },
+          reportedAt: { type: "string", format: "date-time" },
+          tableLabel: { type: "string", nullable: true },
+          tableMinimum: { type: "number", nullable: true },
+          tableMaximum: { type: "number", nullable: true },
+          betUnit: { type: "number", nullable: true },
+          shuffle: {
+            type: "string",
+            enum: ["hand", "auto", "constant"],
+            nullable: true,
+          },
+          rules: { allOf: [{ $ref: "#/components/schemas/TableRules" }], nullable: true },
+          notes: { type: "string", nullable: true },
+        },
+      },
+      PublicReview: {
+        type: "object",
+        required: ["id", "rating", "body", "createdAt"],
+        properties: {
+          id: { type: "string", format: "uuid" },
+          rating: { type: "integer", minimum: 1, maximum: 5 },
+          body: { type: "string", nullable: true },
+          createdAt: { type: "string", format: "date-time" },
+        },
+      },
+    },
+  },
+  paths: {
+    "/health": {
+      get: {
+        tags: ["Health"],
+        summary: "Liveness and database ping",
+        security: [],
+        responses: {
+          "200": {
+            description: "API and database are up",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["ok", "database"],
+                  properties: {
+                    ok: { type: "boolean", enum: [true] },
+                    database: { type: "string", enum: ["up"] },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/v1/casinos/nearby": {
+      get: {
+        tags: ["Casinos"],
+        summary: "Search casinos near a point",
+        description:
+          "Cache-first PostGIS query. On a nearby-cache miss, calls Google Places Nearby (`includedTypes=casino`), upserts venues, then returns rows within the radius with intel summaries.",
+        security: [{ apiKey: [] }],
+        parameters: [
+          { name: "lat", in: "query", required: true, schema: { type: "number" } },
+          { name: "lng", in: "query", required: true, schema: { type: "number" } },
+          {
+            name: "radius",
+            in: "query",
+            required: false,
+            description: "Meters. Default 40000, max 50000.",
+            schema: { type: "number", default: 40000, maximum: 50000 },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Matching casinos",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["casinos", "source"],
+                  properties: {
+                    casinos: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/Casino" },
+                    },
+                    source: { type: "string", enum: ["cache", "google", "database"] },
+                  },
+                },
+              },
+            },
+          },
+          "401": { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/v1/casinos/autocomplete": {
+      get: {
+        tags: ["Casinos"],
+        summary: "Autocomplete casino names",
+        security: [{ apiKey: [] }],
+        parameters: [
+          {
+            name: "q",
+            in: "query",
+            required: true,
+            schema: { type: "string", minLength: 1, maxLength: 256 },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Suggestions",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["suggestions", "source"],
+                  properties: {
+                    suggestions: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        required: ["placeId", "displayName", "formattedAddress"],
+                        properties: {
+                          placeId: { type: "string" },
+                          displayName: { type: "string" },
+                          formattedAddress: { type: "string", nullable: true },
+                        },
+                      },
+                    },
+                    source: { type: "string", enum: ["cache", "google"] },
+                  },
+                },
+              },
+            },
+          },
+          "502": { description: "Places unavailable", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/v1/casinos/{placeId}": {
+      get: {
+        tags: ["Casinos"],
+        summary: "Get a casino by Google Place ID",
+        security: [{ apiKey: [] }],
+        parameters: [
+          {
+            name: "placeId",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Casino with intel summary",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["casino"],
+                  properties: { casino: { $ref: "#/components/schemas/Casino" } },
+                },
+              },
+            },
+          },
+          "404": { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/v1/casinos/{placeId}/sessions": {
+      post: {
+        tags: ["Casinos"],
+        summary: "Record a session select",
+        description: "Upserts the casino if needed and writes a `session` observation. Optional body may include name, address, and coordinates as a hint when Places is unavailable.",
+        security: [{ apiKey: [] }],
+        parameters: [
+          { name: "placeId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  address: { type: "string" },
+                  coordinates: { $ref: "#/components/schemas/Coordinates" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description: "Observation recorded",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["casino", "observed"],
+                  properties: {
+                    casino: { $ref: "#/components/schemas/Casino" },
+                    observed: { type: "string", enum: ["session"] },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/v1/casinos/{placeId}/incidents": {
+      post: {
+        tags: ["Intel"],
+        summary: "Report a backed-off or trespassed incident",
+        security: [{ apiKey: [] }],
+        parameters: [
+          { name: "placeId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["kind", "occurredAt"],
+                properties: {
+                  kind: { type: "string", enum: ["backed_off", "trespassed"] },
+                  occurredAt: { type: "string", format: "date-time" },
+                  sessionId: {
+                    type: "string",
+                    description: "Client session id. Stored, never returned on GET.",
+                  },
+                  notes: { type: "string", maxLength: 2000 },
+                  externalAuthorId: {
+                    type: "string",
+                    description: "Hashed with source_app; never returned on GET.",
+                  },
+                },
+              },
+              example: {
+                kind: "backed_off",
+                occurredAt: "2026-09-07T19:10:00.000Z",
+                sessionId: "abc",
+                externalAuthorId: "user-id-in-calling-app",
+              },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description: "Incident stored",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["incident"],
+                  properties: {
+                    incident: { $ref: "#/components/schemas/PublicIncident" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      get: {
+        tags: ["Intel"],
+        summary: "List anonymized incidents",
+        security: [{ apiKey: [] }],
+        parameters: [
+          { name: "placeId", in: "path", required: true, schema: { type: "string" } },
+          { name: "since", in: "query", schema: { type: "string", format: "date-time" } },
+          {
+            name: "kind",
+            in: "query",
+            schema: { type: "string", enum: ["backed_off", "trespassed"] },
+          },
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 200 } },
+        ],
+        responses: {
+          "200": {
+            description: "Incidents without reporter or session ids",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["incidents"],
+                  properties: {
+                    incidents: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/PublicIncident" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/v1/casinos/{placeId}/conditions": {
+      post: {
+        tags: ["Intel"],
+        summary: "Report a table sit, update, or leave",
+        security: [{ apiKey: [] }],
+        parameters: [
+          { name: "placeId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["eventKind", "reportedAt"],
+                properties: {
+                  eventKind: { type: "string", enum: ["seated", "updated", "departed"] },
+                  reportedAt: { type: "string", format: "date-time" },
+                  tableLabel: { type: "string" },
+                  tableMinimum: { type: "number" },
+                  tableMaximum: { type: "number" },
+                  betUnit: { type: "number" },
+                  shuffle: { type: "string", enum: ["hand", "auto", "constant"] },
+                  rules: { $ref: "#/components/schemas/TableRules" },
+                  notes: { type: "string" },
+                  externalAuthorId: { type: "string" },
+                },
+              },
+              example: {
+                eventKind: "seated",
+                reportedAt: "2026-09-07T19:12:00.000Z",
+                tableLabel: "BJ 12",
+                tableMinimum: 25,
+                tableMaximum: 1000,
+                betUnit: 50,
+                shuffle: "auto",
+                rules: {
+                  deckCount: 6,
+                  payout: "Standard",
+                  standOnSoft17: true,
+                  doubleAfterSplit: true,
+                  surrender: "LateSurrender",
+                },
+                externalAuthorId: "user-id-in-calling-app",
+              },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description: "Condition stored",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["condition"],
+                  properties: {
+                    condition: { $ref: "#/components/schemas/PublicTableCondition" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      get: {
+        tags: ["Intel"],
+        summary: "List table conditions",
+        description:
+          "`current=true` (default) returns the latest report per table in the freshness window, excluding tables whose latest event is `departed`. `current=false` returns history.",
+        security: [{ apiKey: [] }],
+        parameters: [
+          { name: "placeId", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "current",
+            in: "query",
+            schema: { type: "string", enum: ["true", "false"], default: "true" },
+          },
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 200 } },
+        ],
+        responses: {
+          "200": {
+            description: "Table conditions",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["conditions", "current"],
+                  properties: {
+                    conditions: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/PublicTableCondition" },
+                    },
+                    current: { type: "boolean" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/v1/casinos/{placeId}/reviews": {
+      get: {
+        tags: ["Reviews"],
+        summary: "List reviews",
+        description: "Write API is not implemented yet; this returns an empty list until reviews exist.",
+        security: [{ apiKey: [] }],
+        parameters: [
+          { name: "placeId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          "200": {
+            description: "Reviews",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["reviews"],
+                  properties: {
+                    reviews: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/PublicReview" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+const out = join(repoRoot, "docs", "openapi.yaml");
+await writeFile(out, stringify(spec, { lineWidth: 100 }), "utf8");
+console.log(`Wrote ${out}`);

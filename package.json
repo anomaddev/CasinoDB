@@ -1,0 +1,23 @@
+{
+  "name": "casinodb",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run build -w @casinodb/shared && npm run dev -w @casinodb/api",
+    "build": "npm run build -w @casinodb/shared && npm run build -w @casinodb/sdk && npm run build -w @casinodb/api",
+    "prepare": "npm run build -w @casinodb/shared",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:migrate": "npm run db:migrate -w @casinodb/api",
+    "keys:create": "npm run keys:create -w @casinodb/api --",
+    "docs:openapi": "npm run docs:openapi -w @casinodb/api"
+  }
+}
