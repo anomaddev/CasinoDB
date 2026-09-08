@@ -17,9 +17,10 @@ From another app in a monorepo, depend on the workspace package. HTTP clients th
 import { CasinoDBClient, CasinoDBError } from "@casinodb/sdk";
 
 const db = new CasinoDBClient({
-  baseUrl: "http://localhost:3000",
+  baseUrl: "https://casinodb.cardcountingcoach.com",
   apiKey: process.env.CASINODB_API_KEY!,
 });
+// local: baseUrl: "http://localhost:3000"
 ```
 
 Optional `fetch` override for tests or React Native.

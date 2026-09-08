@@ -10,6 +10,7 @@ CasinoDB is a **multi-app** HTTP API: Places-backed casino rows in PostgreSQL, p
 4. [OpenAPI](openapi.yaml) — machine-readable contract
 5. [SDK](sdk.md) — TypeScript client
 6. [Intel privacy](intel.md) — incidents, table conditions, anonymous public reads
+7. [Deploy](deploy.md) — `casinodb.cardcountingcoach.com` on Hostinger + PostGIS
 
 ## For contributors
 
@@ -19,4 +20,4 @@ CasinoDB is a **multi-app** HTTP API: Places-backed casino rows in PostgreSQL, p
 
 ## Local run
 
-See the root [README.md](../README.md).
+See the root [README.md](../README.md). Production: [deploy.md](deploy.md).

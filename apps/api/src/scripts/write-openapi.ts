@@ -13,7 +13,10 @@ const spec = {
     description:
       "Multi-app casino catalog and crowd-sourced floor intel. Google Place ID is the canonical venue id. Public reads never include reporter or client session identifiers.",
   },
-  servers: [{ url: "http://localhost:3000", description: "Local" }],
+  servers: [
+    { url: "https://casinodb.cardcountingcoach.com", description: "Production" },
+    { url: "http://localhost:3000", description: "Local" },
+  ],
   tags: [
     { name: "Health" },
     { name: "Casinos" },
