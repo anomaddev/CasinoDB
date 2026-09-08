@@ -1,5 +1,6 @@
 # HTTP API
 
+Base URL (production): `https://casinodb.cardcountingcoach.com`  
 Base URL (local): `http://localhost:3000`
 
 All `/v1` routes: `Authorization: Bearer <api_key>`. See [auth.md](auth.md).
@@ -53,7 +54,8 @@ List and detail payloads share this shape (intel summary included so clients can
 No auth. Database ping.
 
 ```bash
-curl http://localhost:3000/health
+curl https://casinodb.cardcountingcoach.com/health
+# local: curl http://localhost:3000/health
 ```
 
 ```json

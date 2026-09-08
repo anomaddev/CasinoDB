@@ -44,4 +44,4 @@ Client app  →  SDK / HTTP  →  API key auth  →  Hono /v1
 - `@casinodb/shared` — Zod request/response contracts
 - `@casinodb/sdk` — fetch wrapper over `/v1`
 
-Hosting is out of scope for v1; run locally with Docker Compose PostGIS.
+Hosting is **not** on the same process as any consumer app. Production HTTP is `https://casinodb.cardcountingcoach.com`. Postgres + PostGIS is a separate database (Hostinger website MySQL cannot run nearby search). See [deploy.md](deploy.md).

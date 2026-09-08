@@ -2,7 +2,7 @@
 
 A standalone, multi-app platform API for a **casino catalog** (Google Places–backed, cached in PostgreSQL) plus **crowd-sourced floor intel** (backed off, trespassed, table conditions). Any authorized client app can read and write. Card Counting Coach is only the first known consumer — the contract is generic.
 
-Canonical venue id is the **Google Place ID**.
+Canonical venue id is the **Google Place ID**. Production HTTP: [https://casinodb.cardcountingcoach.com](https://casinodb.cardcountingcoach.com).
 
 ## Quick start
 
@@ -46,7 +46,7 @@ curl -H "Authorization: Bearer $CASINODB_API_KEY" \
 
 ## Documentation
 
-Start at [docs/README.md](docs/README.md).
+Start at [docs/README.md](docs/README.md). Production deploy: [docs/deploy.md](docs/deploy.md).
 
 ## Environment
 
@@ -59,6 +59,7 @@ See [.env.example](.env.example). Required for the API: `DATABASE_URL`, `API_KEY
 | `npm run db:up` | Start PostGIS via Docker Compose |
 | `npm run db:migrate` | Apply SQL in `drizzle/` |
 | `npm run keys:create` | Issue a hashed API key (prints the secret once) |
+| `npm run start` | Run the compiled API (`apps/api/dist/index.js`) |
 | `npm run dev` | Build shared contracts and watch the API |
 | `npm run build` | Compile shared, SDK, and API |
 | `npm run docs:openapi` | Regenerate `docs/openapi.yaml` |
